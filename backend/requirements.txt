@@ -1,0 +1,14 @@
+Django==5.0.6
+djangorestframework==3.15.1
+djangorestframework-simplejwt==5.3.1
+django-cors-headers==4.3.1
+psycopg2-binary==2.9.9
+google-genai==0.3.0
+pydantic==2.7.1
+requests==2.32.3
+xhtml2pdf==0.2.16
+python-dotenv==1.0.1
+
+# Optional — only if PostGIS/GDAL are available on the host.
+# Without these, geo_services.py's Haversine fallback is used automatically.
+# django-contrib-gis ships with Django; GDAL must be installed at the OS level.
