@@ -36,7 +36,7 @@
   }
   .brand{display:flex;align-items:center;gap:12px;}
   .brand .mark{
-    width:38px;height:38px;border-radius:8px;background:var(--wheat);
+    width:38px;height:35px;border-radius:8px;background:var(--wheat);
     display:flex;align-items:center;justify-content:center;color:var(--forest-dk);font-weight:700;font-family:'Fraunces',serif;
   }
   .brand .name{font-family:'Fraunces',serif;font-size:20px;font-weight:600;letter-spacing:.2px;}
@@ -47,19 +47,34 @@
   }
 
   .hero{
-    background:linear-gradient(180deg,var(--forest) 0%,var(--forest-dk) 100%);
-    color:var(--paper);padding:56px 28px 72px;position:relative;overflow:hidden;
-  }
+  background:linear-gradient(180deg,var(--forest) 0%,var(--forest-dk) 100%);
+  color:var(--paper);
+  padding:20px 28px 25px;
+  position:relative;
+  overflow:hidden;
+  min-height:0;
+}
   .hero::after{
     content:"";position:absolute;right:-60px;bottom:-90px;width:340px;height:340px;
     border-radius:50%;background:radial-gradient(circle,rgba(212,166,42,.18),transparent 70%);
   }
   .hero-inner{max-width:980px;margin:0 auto;position:relative;}
   .eyebrow{text-transform:uppercase;letter-spacing:2px;font-size:12px;color:var(--wheat);font-weight:600;}
-  .hero h1{font-size:clamp(30px,4vw,46px);margin:10px 0 12px;line-height:1.08;font-weight:600;}
-  .hero p{max-width:620px;color:#e6ded0;font-size:16px;line-height:1.55;}
+ .hero h1{
+  font-size:clamp(28px,3.5vw,40px);
+  margin:5px 0 8px;
+  line-height:1.08;
+  font-weight:600;
+}
+  .hero p{
+  max-width:620px;
+  color:#e6ded0;
+  font-size:15px;
+  line-height:1.45;
+  margin:0;
+}
 
-  main{max-width:1080px;margin:-40px auto 60px;padding:0 20px;}
+  main{max-width:1080px;margin:40px auto 60px;padding:0 20px;}
   .panel{
     background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px;margin-bottom:22px;
     box-shadow:0 1px 2px rgba(20,20,10,.04);
@@ -155,7 +170,6 @@
 
 <section class="hero">
   <div class="hero-inner">
-    <div class="eyebrow" data-i18n="hero_eyebrow">Smart India Hackathon · Prototype</div>
     <h1 data-i18n="hero_title">Turn a small margin into a bankable business plan.</h1>
     <p data-i18n="hero_sub">Enter your available capital and location — get a deterministic loan structure, a live map of nearby competitors from OpenStreetMap, and a feasibility report you can carry to a bank.</p>
   </div>
@@ -165,7 +179,6 @@
 
   <div class="panel">
     <h2><span class="step-num">1</span><span data-i18n="wizard_title">Business Enquiry</span></h2>
-    <div class="sub" data-i18n="wizard_sub">Tell us where and what you want to start — the math and the map do the rest.</div>
 
     <div class="grid3">
       <div class="field">
@@ -189,7 +202,6 @@
           <input id="inPlace" type="text" placeholder="e.g. Bishnupur, West Bengal, India" value="Bishnupur, West Bengal, India" style="flex:1;">
           <button class="ghost" id="btnGeocode" type="button" data-i18n="btn_locate">Locate</button>
         </div>
-        <div class="footnote" id="geoStatus" data-i18n="geo_hint">Uses OpenStreetMap Nominatim (free, no API key).</div>
       </div>
       <div class="field">
         <label data-i18n="lbl_category">Business category</label>
@@ -220,7 +232,6 @@
 
     <div class="panel">
       <h2><span class="step-num">2</span><span data-i18n="fin_title">Financial Structure</span></h2>
-      <div class="sub" data-i18n="fin_sub">Deterministic — computed in plain JavaScript, never by an AI model.</div>
       <div id="schemeBadgeRow" style="margin-bottom:10px;"></div>
       <div class="statgrid" id="finStats"></div>
       <div style="margin-top:20px;display:grid;grid-template-columns:1fr 1.4fr;gap:20px;" class="grid2">
@@ -235,7 +246,6 @@
 
     <div class="panel">
       <h2><span class="step-num">3</span><span data-i18n="map_title">Hyper-local Competitor Map</span></h2>
-      <div class="sub" data-i18n="map_sub">Live data from OpenStreetMap via the Overpass API — no paid keys required.</div>
       <div id="map"></div>
       <div class="legend">
         <span><span class="dot" style="background:#3d7a4d"></span><span data-i18n="legend_5km">5 km radius</span></span>
@@ -253,7 +263,6 @@
 
     <div class="panel">
       <h2><span class="step-num">4</span><span data-i18n="adv_title">Feasibility & Advisory</span></h2>
-      <div class="sub" id="adv_sub_text" data-i18n="adv_sub">Rule-based demo advisory generated from your inputs and live map data. In production this call is routed to the Gemini API (server-side, structured JSON output) as specified in Section 6 of the system design.</div>
       <p id="marketReach" style="font-size:14.5px;line-height:1.6;"></p>
       <div class="swot-grid">
         <div class="swot-card s"><h4 data-i18n="swot_s">Strengths</h4><ul id="swotS"></ul></div>
@@ -267,7 +276,6 @@
 
     <div class="panel">
       <h2><span class="step-num">5</span><span data-i18n="dpr_title">Bank-Ready DPR Summary</span></h2>
-      <div class="sub" data-i18n="dpr_sub">Executive summary formatted for a loan sanctioning officer.</div>
       <div id="dprText" style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:16px;font-size:14px;line-height:1.7;white-space:pre-line;"></div>
       <button class="ghost" id="btnExport" style="margin-top:14px;" type="button" data-i18n="btn_export">Download DPR (.txt)</button>
     </div>
