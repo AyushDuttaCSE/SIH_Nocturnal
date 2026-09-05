@@ -28,7 +28,7 @@ def generate_ai_feasibility_study(financial_data: dict, geo_data: dict, business
     geo_data: {village, block, district, competitor_count_10km, saturation_level}
     Returns a dict matching AdvisoryResponseSchema.
     """
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(api_key=os.environ["AQ.Ab8RN6IuPwei_UaXSbeZfFzI2Jtq8acIF1eeBk9rOfJussuFlQ"])
 
     prompt = f"""
     You are an institutional micro-enterprise advisor for rural India (State Channelizing
