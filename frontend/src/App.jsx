@@ -27,13 +27,9 @@ const GEO_HEADERS = { "User-Agent": "GramSetu-Enterprise-App/2.0" };
 // Dynamic Forward Geocoding: Searches nationwide without state restrictions
 async function fetchCoordsFromAddress({ village, block, district, state }) {
   const queries = [
-    // Priority 1: Full granular hierarchy
     [village, block, district, state, "India"].filter(Boolean).join(", "),
-    // Priority 2: Village + District
     [village, district, state, "India"].filter(Boolean).join(", "),
-    // Priority 3: Block/Taluk + District
     [block, district, state, "India"].filter(Boolean).join(", "),
-    // Priority 4: District wide fallback
     [district, state, "India"].filter(Boolean).join(", ")
   ];
 
@@ -99,14 +95,13 @@ function Wizard() {
     margin: 50000,
   });
 
-  const [center, setCenter] = useState({ lat: 20.5937, lon: 78.9629 }); // Pan-India center default
+  const [center, setCenter] = useState({ lat: 20.5937, lon: 78.9629 });
   const [resolvedLocationName, setResolvedLocationName] = useState("");
   const [competitors, setCompetitors] = useState([]);
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
 
-  // Tracks active coordinates synchronously to prevent stale state submissions
   const activeCoordsRef = useRef(center);
   useEffect(() => {
     activeCoordsRef.current = center;
@@ -181,7 +176,7 @@ function Wizard() {
     }
   };
 
-  // 3. Dynamic Submission
+  // 3. Dynamic Submission with Merged Numerical/Statistical Payload Extraction
   const handleGenerate = async () => {
     if (!form.village && !form.district) {
       alert("Please provide at least a Village or District name.");
@@ -190,34 +185,43 @@ function Wizard() {
 
     setLoading(true);
     try {
-      // Force an immediate coordinate refresh to prevent using stale coordinates
       let targetLat = activeCoordsRef.current.lat;
       let targetLon = activeCoordsRef.current.lon;
 
-      const directResolution = await fetchCoordsFromAddress(form);
-      if (directResolution) {
-        targetLat = directResolution.lat;
-        targetLon = directResolution.lon;
-        setCenter({ lat: targetLat, lon: targetLon });
-        setResolvedLocationName(directResolution.displayName);
+      try {
+        const directResolution = await fetchCoordsFromAddress(form);
+        if (directResolution) {
+          targetLat = directResolution.lat;
+          targetLon = directResolution.lon;
+          setCenter({ lat: targetLat, lon: targetLon });
+          setResolvedLocationName(directResolution.displayName);
+        }
+      } catch (geoErr) {
+        console.warn("Geocoding failed, proceeding with active coordinates:", geoErr);
       }
 
       // 1. Fetch live competitors from OpenStreetMap Overpass
-      const density = await competitorsDensity({
-        latitude: targetLat,
-        longitude: targetLon,
-        category: form.category,
-        business_type: form.category,
-        radius_km: 10,
-      });
+      let competitorPool = [];
+      let competitorCount = 0;
+      let saturationLevel = "MODERATE";
 
-      const competitorPool = density?.competitors || [];
-      const competitorCount = density?.competitor_count ?? competitorPool.length;
-      const saturationLevel = density?.saturation_level || "MODERATE";
+      try {
+        const density = await competitorsDensity({
+          latitude: targetLat,
+          longitude: targetLon,
+          category: form.category,
+          business_type: form.category,
+          radius_km: 10,
+        });
+        competitorPool = density?.competitors || [];
+        competitorCount = density?.competitor_count ?? competitorPool.length;
+        saturationLevel = density?.saturation_level || "MODERATE";
+        setCompetitors(competitorPool);
+      } catch (densityErr) {
+        console.warn("Overpass API query failed, proceeding with fallback density:", densityErr);
+      }
 
-      setCompetitors(competitorPool);
-
-      // 2. Generate Mistral Feasibility Analysis
+      // 2. Generate Feasibility Analysis
       const result = await generateFeasibility({
         village: form.village || "Local Area",
         block: form.block || form.village || "Local Block",
@@ -233,8 +237,36 @@ function Wizard() {
         language,
       });
 
-      setReport(result?.report || result);
+      // Extract and merge all numerical, geographic, and qualitative advisory layers
+      const aiReport = result?.report || result?.data?.report || {};
+      const finData = result?.finance || result?.financial_structure || {};
+      const geoData = result?.geography || result?.geo_context || {};
+
+      const mergedReport = {
+        ...aiReport,
+        // Deterministic Financials (with fallback math if missing from payload)
+        margin_capital: finData.margin_capital ?? aiReport.margin_capital ?? form.margin,
+        total_project_cost: finData.total_project_cost ?? aiReport.total_project_cost ?? (form.margin / 0.10),
+        loan_amount: finData.loan_amount ?? aiReport.loan_amount ?? ((form.margin / 0.10) * 0.90),
+        monthly_emi: finData.monthly_emi ?? aiReport.monthly_emi ?? 0,
+        interest_rate_pa: finData.interest_rate_pa ?? aiReport.interest_rate_pa ?? 8.0,
+        tenure_years: finData.tenure_years ?? aiReport.tenure_years ?? 5,
+        moratorium_months: finData.moratorium_months ?? aiReport.moratorium_months ?? 6,
+        scheme_name: finData.scheme_name || aiReport.scheme_name || "Rural Priority Micro-Credit (SCA)",
+
+        // Geographic & Competitive Metrics
+        competitor_count: geoData.competitor_count ?? aiReport.competitor_count ?? competitorCount,
+        competitor_count_10km: geoData.competitor_count_10km ?? aiReport.competitor_count_10km ?? competitorCount,
+        saturation_level: geoData.saturation_level || aiReport.saturation_level || saturationLevel,
+        village: geoData.village || form.village || "Local Area",
+        block: geoData.block || form.block || "Local Block",
+        district: geoData.district || form.district || "Local District",
+        state: geoData.state || form.state || "",
+      };
+
+      setReport(mergedReport);
     } catch (e) {
+      console.error("[handleGenerate Error]:", e);
       alert(e.response?.data?.message || e.message || "Failed to generate report");
     } finally {
       setLoading(false);
@@ -243,8 +275,7 @@ function Wizard() {
 
   return (
     <div className="max-w-4xl mx-auto px-5 py-10 space-y-6 font-body">
-      <header className="flex justify-between items-center">
-        <h1 className="font-display text-2xl text-forest-dk">GramSetu (v2 Dynamic)</h1>
+      <header className="flex justify-between items-center pb-2 border-b border-paper-dk">
         <div>
           <h1 className="font-display text-2xl text-forest-dk">GramSetu</h1>
           <p className="text-xs text-gray-500">Rural Credit & Enterprise Feasibility Terminal</p>
@@ -252,7 +283,7 @@ function Wizard() {
         <select
           value={language}
           onChange={(e) => setLanguage(e.target.value)}
-          className="border border-paper-dk rounded-md px-2 py-1 text-sm bg-white"
+          className="border border-paper-dk rounded-md px-3 py-1.5 text-sm bg-white font-medium"
         >
           <option value="en">English</option>
           <option value="hi">हिन्दी</option>
@@ -319,7 +350,7 @@ function Wizard() {
         <div>
           <label className="block text-xs font-semibold uppercase tracking-wide mb-1">Category</label>
           <select
-            className="w-full border border-paper-dk rounded-md px-3 py-2 bg-paper"
+            className="w-full border border-paper-dk rounded-md px-3 py-2 bg-paper text-sm"
             value={form.category}
             onChange={(e) => setForm({ ...form, category: e.target.value })}
           >
@@ -368,13 +399,74 @@ function Wizard() {
       </section>
 
       {report && (
-        <>
+        <div id="report-section" className="space-y-6 pt-2">
+          {/* Statistical Metrics Strip */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-paper border border-paper-dk rounded-xl p-4 shadow-sm">
+              <div className="text-[11px] font-bold text-[#7a7460] uppercase tracking-wider">Total Outlay</div>
+              <div className="font-mono text-xl font-bold text-forest-dk mt-1">
+                ₹{Number(report.total_project_cost || 0).toLocaleString("en-IN")}
+              </div>
+              <div className="text-[10px] text-gray-500 mt-0.5">100% Capital Outlay</div>
+            </div>
+
+            <div className="bg-paper border border-paper-dk rounded-xl p-4 shadow-sm">
+              <div className="text-[11px] font-bold text-[#7a7460] uppercase tracking-wider">SCA Debt (90%)</div>
+              <div className="font-mono text-xl font-bold text-forest-dk mt-1">
+                ₹{Number(report.loan_amount || 0).toLocaleString("en-IN")}
+              </div>
+              <div className="text-[10px] text-gray-500 mt-0.5">{report.interest_rate_pa || 8}% p.a. • {report.tenure_years || 5}Y</div>
+            </div>
+
+            <div className="bg-paper border border-paper-dk rounded-xl p-4 shadow-sm">
+              <div className="text-[11px] font-bold text-[#7a7460] uppercase tracking-wider">Promoter Margin (10%)</div>
+              <div className="font-mono text-xl font-bold text-forest-dk mt-1">
+                ₹{Number(report.margin_capital || 0).toLocaleString("en-IN")}
+              </div>
+              <div className="text-[10px] text-gray-500 mt-0.5">Equity Contribution</div>
+            </div>
+
+            <div className="bg-paper border border-paper-dk rounded-xl p-4 shadow-sm">
+              <div className="text-[11px] font-bold text-[#7a7460] uppercase tracking-wider">Monthly Repayment</div>
+              <div className="font-mono text-xl font-bold text-forest-dk mt-1">
+                ₹{Number(report.monthly_emi || 0).toLocaleString("en-IN")}
+              </div>
+              <div className="text-[10px] text-gray-500 mt-0.5">{report.moratorium_months || 6}M Moratorium</div>
+            </div>
+          </div>
+
+          {/* Market Saturation Context */}
+          <div className="flex items-center justify-between bg-white border border-paper-dk rounded-xl p-4 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-gray-700">10km Radial Competition:</span>
+              <span className="font-mono font-bold bg-[#efe8d6] px-2 py-0.5 rounded text-forest-dk">
+                {report.competitor_count ?? competitors.length} Identified POIs
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-gray-700">Saturation Index:</span>
+              <span className={`px-2 py-0.5 rounded font-bold uppercase ${
+                report.saturation_level === "LOW" ? "bg-green-100 text-green-800" :
+                report.saturation_level === "HIGH" ? "bg-red-100 text-red-800" :
+                "bg-amber-100 text-amber-800"
+              }`}>
+                {report.saturation_level || "MODERATE"}
+              </span>
+            </div>
+          </div>
+
+          {/* Qualitative Advisory & SWOT Matrix */}
           <AdvisoryReportView report={report} />
-          <section className="bg-white border border-paper-dk rounded-xl p-6 shadow-sm">
-            <h2 className="font-display text-lg mb-3">Bank-ready DPR</h2>
+
+          {/* Bank-Ready Detailed Project Report */}
+          <section className="bg-white border border-paper-dk rounded-xl p-6 shadow-sm space-y-3">
+            <h2 className="font-display text-lg">Bank-ready DPR Summary</h2>
+            <p className="text-sm text-gray-700 leading-relaxed">
+              {report.bank_dpr_summary}
+            </p>
             <DprPdfGenerator report={report} />
           </section>
-        </>
+        </div>
       )}
     </div>
   );

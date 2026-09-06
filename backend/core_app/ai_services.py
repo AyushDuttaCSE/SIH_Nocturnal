@@ -2,6 +2,7 @@
 ai_services.py
 AI Engine — Direct Mistral AI REST integration via requests.
 Zero external SDK dependencies to prevent Python 3.14 namespace issues.
+Configured with strict socket failovers to avoid HTTP request timeouts.
 """
 import os
 import json
@@ -29,12 +30,12 @@ class AdvisoryResponseSchema(BaseModel):
 def generate_ai_feasibility_study(financial_data: dict, geo_data: dict, business_category: str, language: str = "en") -> dict:
     api_key = os.getenv("MISTRAL_API_KEY")
     if not api_key:
-        logger.warning("MISTRAL_API_KEY missing in environment. Engaging fallback.")
+        logger.warning("MISTRAL_API_KEY missing in environment. Engaging deterministic fallback immediately.")
         return _build_fallback(financial_data, geo_data, business_category)
 
-    village = geo_data.get('village', 'Local Village')
-    block = geo_data.get('block', 'Local Block')
-    district = geo_data.get('district', 'District')
+    village = geo_data.get('village') or geo_data.get('village_name') or 'Local Village'
+    block = geo_data.get('block') or geo_data.get('block_name') or 'Local Block'
+    district = geo_data.get('district') or geo_data.get('district_name') or 'District'
     comp_count = geo_data.get('competitor_count_10km', geo_data.get('competitor_count', 0))
     saturation = geo_data.get('saturation_level', geo_data.get('density_rating', 'MODERATE'))
 
@@ -89,8 +90,8 @@ def generate_ai_feasibility_study(financial_data: dict, geo_data: dict, business
         "Content-Type": "application/json"
     }
 
-    # Sequence of models to try in case of rate limits on specific tiers
-    candidate_models = ["open-mistral-7b", "mistral-small-latest", "mistral-tiny"]
+    # Use modern primary model with one fast fallback model only
+    candidate_models = ["mistral-small-latest", "open-mistral-7b"]
 
     for model in candidate_models:
         payload = {
@@ -104,28 +105,43 @@ def generate_ai_feasibility_study(financial_data: dict, geo_data: dict, business
         }
 
         try:
-            response = requests.post(MISTRAL_API_URL, headers=headers, json=payload, timeout=25)
+            # Strict 7-second socket timeout to prevent blocking the WSGI thread
+            response = requests.post(MISTRAL_API_URL, headers=headers, json=payload, timeout=7)
             
             if response.status_code == 200:
                 data = response.json()
                 raw_text = data["choices"][0]["message"]["content"]
-                return AdvisoryResponseSchema.model_validate_json(raw_text).model_dump()
-            
-            print(f"[Mistral Alert] Model '{model}' failed with status {response.status_code}: {response.text[:200]}")
-            if response.status_code == 429:
-                continue  # Try next model in list
+                
+                # Attempt strict schema validation
+                try:
+                    return AdvisoryResponseSchema.model_validate_json(raw_text).model_dump()
+                except Exception as parse_err:
+                    logger.warning(f"Schema validation failed, falling back to raw JSON decode: {parse_err}")
+                    parsed = json.loads(raw_text)
+                    if isinstance(parsed, dict) and "swot_strengths" in parsed:
+                        return parsed
 
+            print(f"[Mistral Alert] Model '{model}' responded with status {response.status_code}")
+            if response.status_code in [401, 403]:
+                # Invalid API key — don't waste time trying subsequent models
+                logger.error("Mistral API key authentication failed. Dropping to fallback.")
+                break
+
+        except requests.exceptions.Timeout:
+            print(f"[Mistral Timeout] Model '{model}' exceeded 7s limit. Fast-failing.")
+            continue
         except Exception as e:
             print(f"[Mistral Request Error on {model}]: {e}")
             continue
 
-    logger.warning("All Mistral candidate models exhausted or rate-limited. Engaging deterministic fallback.")
+    logger.warning("Mistral models timed out or failed. Engaging fast deterministic fallback.")
     return _build_fallback(financial_data, geo_data, business_category)
 
 
 def _build_fallback(financial_data: dict, geo_data: dict, business_category: str) -> dict:
-    village = geo_data.get('village', 'Local Village')
-    block = geo_data.get('block', 'Local Block')
+    village = geo_data.get('village') or geo_data.get('village_name') or 'Local Village'
+    block = geo_data.get('block') or geo_data.get('block_name') or 'Local Block'
+    district = geo_data.get('district') or geo_data.get('district_name') or 'District'
     margin_cap = financial_data.get('margin_capital', 0)
     project_cost = financial_data.get('total_project_cost', 0)
     loan_amount = financial_data.get('loan_amount', 0)
@@ -134,39 +150,40 @@ def _build_fallback(financial_data: dict, geo_data: dict, business_category: str
     comp_count = geo_data.get('competitor_count_10km', geo_data.get('competitor_count', 0))
 
     return {
-        "market_reach_summary": f"Primary target audience within a 5-10km radius of {village}, covering local weekly haats and resident households.",
+        "market_reach_summary": f"Primary consumer catchment within a 5-10km radius of {village}, covering local bi-weekly haats and rural households across {district}.",
         "opportunity_analysis": [
-            f"Direct retail delivery across {block}",
-            "Aggregate supply linkages with block cooperative bodies",
-            "Value addition and primary grading for higher margins"
+            f"Direct doorstep delivery across {block} panchayat clusters",
+            "Institutional supply linkages with local primary agricultural cooperatives",
+            "Semi-automated sorting and packaging to command a 10-15% quality premium"
         ],
         "swot_strengths": [
-            f"Low promoter capital requirement of Rs. {margin_cap}",
-            f"Subsidized term loan sanction under {scheme_name}"
+            f"Low promoter capital barrier of Rs. {margin_cap:,}",
+            f"Concessional term loan sanction backed by {scheme_name}"
         ],
         "swot_weaknesses": [
-            "Working capital pressure in initial quarter",
-            "High reliance on local power and transport infrastructure"
+            "Initial working capital squeeze during the first 60 days of operations",
+            "Vulnerability to local power interruptions and single-source logistics"
         ],
         "swot_opportunities": [
-            f"Low competitor density ({comp_count} identified within 10km)",
-            "Rising local consumer demand in rural town fringes"
+            f"Favorable competitive density ({comp_count} direct competitor(s) registered within 10km)",
+            "Expanding demand for branded and hygienic retail goods in peri-urban markets"
         ],
         "swot_threats": [
-            "Seasonal fluctuations in purchasing power",
-            "Price volatility of input raw materials"
+            "Cashflow dependency on agricultural harvest cycles and festival spending",
+            "Sudden wholesale wholesale price fluctuations from district terminal mandis"
         ],
         "localized_risks": [
-            f"Unorganized competition in {block} haats — Mitigate with consistent product quality and fair credit terms.",
-            "Delayed collection cycles — Mitigate by maintaining strict cash-and-carry limits."
+            f"Informal credit expectations in {village} — Mitigate by capping credit book to under 15% of gross sales.",
+            "Delayed inventory turnover — Mitigate by adopting weekly procurement schedules with sub-divisional wholesalers."
         ],
         "pricing_strategy": {
-            "Standard Unit": "Priced 5-8% below nearest sub-divisional town bazaar to stimulate fast uptake.",
-            "Bulk Purchase": "Tiered volume discounts for local institutional buyers or village traders."
+            "Standard Consumer Pack": "Priced 4-6% below nearby town retail rates to drive initial adoption.",
+            "Institutional / Bulk Supply": "Volume-discounted tier (8% margin) for village shops and community kitchens."
         },
         "bank_dpr_summary": (
-            f"Project for {business_category} at {village} has a total capital outlay of Rs. {project_cost}, "
-            f"backed by promoter equity of Rs. {margin_cap} (10%) and recommended debt of Rs. {loan_amount} (90%) "
-            f"under {scheme_name}. With an initial moratorium of {moratorium} months, debt service coverage remains viable."
+            f"Proposed enterprise in {business_category} at {village}, Block {block} has a validated capital outlay "
+            f"of Rs. {project_cost:,}. Supported by promoter margin equity of Rs. {margin_cap:,} (10%) and institutional debt "
+            f"of Rs. {loan_amount:,} (90%) under {scheme_name}. With an initial {moratorium}-month principal moratorium, "
+            f"the projected Debt Service Coverage Ratio (DSCR) remains healthy for priority sector lending."
         )
-    }
+    }   

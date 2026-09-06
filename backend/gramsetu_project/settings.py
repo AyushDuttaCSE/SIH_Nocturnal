@@ -32,12 +32,14 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt', 
     'corsheaders',
+    'core_app',
 
     # App (use 'core' or 'core_app' depending on your folder name)
     'core', 
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware', # Must be placed high up
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -102,6 +104,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
+    "http://127.0.0.1:5173",
 ]
 
 REST_FRAMEWORK = {

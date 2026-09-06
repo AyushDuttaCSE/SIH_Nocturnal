@@ -8,7 +8,12 @@ from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
 
 # Internal Module Imports
-from .calculators import structure_loan as calc_structure_loan, saturation_index
+try:
+    from .calculators import structure_loan as calc_structure_loan, saturation_index
+except ImportError:
+    calc_structure_loan = None
+    saturation_index = None
+
 from .ai_services import generate_ai_feasibility_study
 
 logger = logging.getLogger(__name__)
@@ -30,7 +35,7 @@ OSM_CATEGORY_TAGS = {
 
 
 def serialize_structure(obj):
-    """Safely converts dataclasses, Pydantic models, or objects with to_dict() into dicts."""
+    """Safely converts dataclasses, Pydantic models, or objects into dicts."""
     if isinstance(obj, dict):
         return obj
     if hasattr(obj, "to_dict"):
@@ -44,41 +49,159 @@ def serialize_structure(obj):
     return dict(obj)
 
 
+def compute_deterministic_financials(margin_capital: float) -> dict:
+    """
+    Computes deterministic 90:10 SCA micro-credit financing, comprehensive
+    yearly amortization schedule, and chart-ready dataset objects.
+    """
+    total_cost = round(margin_capital / 0.10, 2)
+    loan_amount = round(total_cost * 0.90, 2)
+    rate = 8.0
+    tenure_years = 5
+    moratorium_months = 6
+
+    # Monthly interest rate & total payment periods
+    r = (rate / 100.0) / 12.0
+    n = tenure_years * 12
+
+    if r > 0 and n > 0:
+        emi = round((loan_amount * r * ((1 + r) ** n)) / (((1 + r) ** n) - 1), 2)
+    else:
+        emi = round(loan_amount / n, 2)
+
+    total_repayment = round(emi * n, 2)
+    total_interest = round(total_repayment - loan_amount, 2)
+
+    # 1. Compute Full Yearly Amortization Schedule
+    schedule = []
+    balance = loan_amount
+    yearly_payment = emi * 12
+
+    for yr in range(1, tenure_years + 1):
+        interest_paid = round(balance * (rate / 100.0), 2)
+        principal_paid = round(yearly_payment - interest_paid, 2)
+
+        if principal_paid > balance or yr == tenure_years:
+            principal_paid = balance
+            closing_balance = 0.0
+        else:
+            closing_balance = round(balance - principal_paid, 2)
+
+        schedule.append({
+            "year": f"Year {yr}",
+            "opening_balance": round(balance, 2),
+            "principal": principal_paid,
+            "interest": interest_paid,
+            "closing_balance": closing_balance,
+            "total_payment": round(principal_paid + interest_paid, 2)
+        })
+        balance = closing_balance
+
+    # 2. Formulate Chart-Ready Datasets (Pie & Trajectory Bar/Line)
+    chart_data = {
+        "cost_breakdown": {
+            "labels": ["Promoter Equity (10%)", "Institutional Debt (90%)"],
+            "datasets": [
+                {
+                    "label": "Capital Outlay (₹)",
+                    "data": [margin_capital, loan_amount],
+                    "backgroundColor": ["#D4A62A", "#1F4D3C"],
+                    "borderColor": ["#efe8d6", "#123028"],
+                    "borderWidth": 1
+                }
+            ]
+        },
+        "repayment_trajectory": {
+            "labels": [item["year"] for item in schedule],
+            "datasets": [
+                {
+                    "label": "Principal Paid (₹)",
+                    "data": [item["principal"] for item in schedule],
+                    "backgroundColor": "#1F4D3C"
+                },
+                {
+                    "label": "Interest Paid (₹)",
+                    "data": [item["interest"] for item in schedule],
+                    "backgroundColor": "#D4A62A"
+                }
+            ]
+        }
+    }
+
+    # Verify if calculators.py has an override
+    if calc_structure_loan:
+        try:
+            struct = calc_structure_loan(margin_capital)
+            data = serialize_structure(struct)
+            data.setdefault('margin_capital', margin_capital)
+            data.setdefault('total_project_cost', total_cost)
+            data.setdefault('loan_amount', loan_amount)
+            data.setdefault('monthly_emi', emi)
+            data.setdefault('total_interest', total_interest)
+            data.setdefault('total_repayment', total_repayment)
+            data.setdefault('amortization_schedule', schedule)
+            data.setdefault('chart_data', chart_data)
+            data.setdefault('scheme_name', 'Rural Priority Micro-Credit (SCA)')
+            data.setdefault('interest_rate_pa', rate)
+            data.setdefault('tenure_years', tenure_years)
+            data.setdefault('moratorium_months', moratorium_months)
+            return data
+        except Exception as e:
+            logger.warning(f"calc_structure_loan hook skipped: {e}")
+
+    return {
+        "margin_capital": margin_capital,
+        "total_project_cost": total_cost,
+        "loan_amount": loan_amount,
+        "monthly_emi": emi,
+        "total_interest": total_interest,
+        "total_repayment": total_repayment,
+        "amortization_schedule": schedule,
+        "chart_data": chart_data,
+        "interest_rate_pa": rate,
+        "tenure_years": tenure_years,
+        "moratorium_months": moratorium_months,
+        "scheme_name": "Rural Priority Micro-Credit (SCA)",
+    }
+
+
+def get_saturation_label(comp_count: int) -> str:
+    """Determines market saturation label safely."""
+    if saturation_index:
+        try:
+            sat = saturation_index(comp_count)
+            if isinstance(sat, dict):
+                return sat.get("level", "MODERATE")
+            if isinstance(sat, str):
+                return sat
+        except Exception:
+            pass
+            
+    if comp_count == 0:
+        return "LOW"
+    elif comp_count <= 3:
+        return "MODERATE"
+    return "HIGH"
+
+
 # --- 1. Finance: Deterministic Loan Structuring ---
 @api_view(['POST', 'GET'])
 def structure_loan(request):
-    """
-    Executes Section 3 deterministic loan structuring via calculators.py.
-    Accepts margin_capital via POST payload or GET query params.
-    """
-    if request.method == 'POST':
-        margin = request.data.get('margin_capital', 50000)
-    else:
-        margin = request.query_params.get('margin_capital', 50000)
-
+    margin = request.data.get('margin_capital') if request.method == 'POST' else request.query_params.get('margin_capital')
     try:
-        margin = float(margin)
-        structure = calc_structure_loan(margin)
-        res_data = serialize_structure(structure)
-        res_data["status"] = "success"
-        return Response(res_data, status=status.HTTP_200_OK)
-    except Exception as e:
-        logger.error(f"Loan calculation error: {e}")
-        return Response({
-            "status": "error",
-            "message": f"Calculation failed: {str(e)}"
-        }, status=status.HTTP_400_BAD_REQUEST)
+        margin = float(margin or 50000)
+    except (ValueError, TypeError):
+        margin = 50000.0
+
+    res_data = compute_deterministic_financials(margin)
+    res_data["status"] = "success"
+    return Response(res_data, status=status.HTTP_200_OK)
 
 
 # --- 2. Auth: OTP / Citizen Login ---
 @api_view(['POST'])
 def otp_login(request):
-    """
-    Citizen login / prototype user verification issuing SimpleJWT tokens.
-    """
     phone_or_user = request.data.get('phone') or request.data.get('username') or 'testuser'
-    
-    # Auto-register/retrieve prototype user
     user, _ = User.objects.get_or_create(username=str(phone_or_user))
     refresh = RefreshToken.for_user(user)
     
@@ -96,10 +219,6 @@ def otp_login(request):
 # --- 3. Geo: Competitor Density & Saturation ---
 @api_view(['POST', 'GET'])
 def competitors_density(request):
-    """
-    Queries live Overpass API for POIs within radius around (lat, lng)
-    and computes the saturation index from calculators.py.
-    """
     params = request.data if request.method == 'POST' else request.query_params
     
     try:
@@ -148,10 +267,9 @@ def competitors_density(request):
                         "category": category_key
                     })
     except Exception as e:
-        logger.warning(f"Overpass query failed: {e}. Falling back to empty competitor pool.")
+        logger.warning(f"Overpass query failed: {e}. Returning empty competitor pool.")
 
-    sat_calc = saturation_index(len(competitors))
-    saturation_level = sat_calc if isinstance(sat_calc, str) else sat_calc.get("level", "MODERATE")
+    saturation_level = get_saturation_label(len(competitors))
 
     return Response({
         "status": "success",
@@ -168,30 +286,46 @@ def competitors_density(request):
 @api_view(['POST'])
 def generate_feasibility(request):
     """
-    Generates structured AI advisory using Mistral AI via ai_services.py.
-    Directly serves the frontend App.jsx generateFeasibility() call.
+    Generates structured AI advisory and merges all numerical statistics, amortization
+    schedules, and chart configurations directly into the report payload.
     """
     body = request.data or {}
     
-    # Financial payload extraction or derivation
+    # 1. Clean margin capital & compute deterministic financials
     try:
-        margin = float(body.get('margin_capital', 50000))
+        margin = float(body.get('margin_capital', body.get('margin', 50000)))
     except (ValueError, TypeError):
         margin = 50000.0
 
-    fin_structure = serialize_structure(calc_structure_loan(margin))
+    fin_structure = compute_deterministic_financials(margin)
     
-    comp_count = int(body.get('competitor_count') or body.get('competitor_count_10km') or 0)
-    sat_level = body.get('saturation_level') or saturation_index(comp_count)
-    if isinstance(sat_level, dict):
-        sat_level = sat_level.get("level", "MODERATE")
+    # 2. Clean competitor density & saturation
+    try:
+        comp_count = int(body.get('competitor_count') or body.get('competitor_count_10km') or 0)
+    except (ValueError, TypeError):
+        comp_count = 0
+
+    sat_level = body.get('saturation_level') or get_saturation_label(comp_count)
+
+    # 3. Clean geography coordinates
+    try:
+        lat = float(body.get('latitude') or body.get('center_lat') or 23.0708)
+        lng = float(body.get('longitude') or body.get('center_lng') or 87.3167)
+    except (ValueError, TypeError):
+        lat, lng = 23.0708, 87.3167
+
+    village = body.get('village') or body.get('village_name') or 'Local Area'
+    block = body.get('block') or body.get('block_name') or 'Local Block'
+    district = body.get('district') or body.get('district_name') or 'Local District'
+    state = body.get('state', '')
 
     geo_data = {
-        "village": body.get('village') or body.get('village_name') or 'Bishnupur',
-        "block": body.get('block') or body.get('block_name') or 'Bishnupur',
-        "district": body.get('district') or body.get('district_name') or 'Bankura',
-        "latitude": body.get('latitude') or body.get('center_lat') or 23.0708,
-        "longitude": body.get('longitude') or body.get('center_lng') or 87.3167,
+        "village": village,
+        "block": block,
+        "district": district,
+        "state": state,
+        "latitude": lat,
+        "longitude": lng,
         "competitor_count_10km": comp_count,
         "competitor_count": comp_count,
         "saturation_level": sat_level
@@ -201,7 +335,7 @@ def generate_feasibility(request):
         body.get('business_category') 
         or body.get('category_code') 
         or body.get('category') 
-        or 'Agri-Retail'
+        or 'Grocery / General store'
     )
     language = body.get('language', 'en')
 
@@ -212,6 +346,34 @@ def generate_feasibility(request):
             business_category=business_category,
             language=language
         )
+
+        # Merge statistical, amortization, and visual data directly into report root
+        if isinstance(report, dict):
+            report.update({
+                "margin_capital": fin_structure["margin_capital"],
+                "total_project_cost": fin_structure["total_project_cost"],
+                "loan_amount": fin_structure["loan_amount"],
+                "monthly_emi": fin_structure["monthly_emi"],
+                "total_interest": fin_structure["total_interest"],
+                "total_repayment": fin_structure["total_repayment"],
+                "amortization_schedule": fin_structure["amortization_schedule"],
+                "chart_data": fin_structure["chart_data"],
+                "interest_rate_pa": fin_structure["interest_rate_pa"],
+                "tenure_years": fin_structure["tenure_years"],
+                "moratorium_months": fin_structure["moratorium_months"],
+                "scheme_name": fin_structure["scheme_name"],
+                "competitor_count": comp_count,
+                "competitor_count_10km": comp_count,
+                "saturation_level": sat_level,
+                "village": village,
+                "block": block,
+                "district": district,
+                "state": state,
+                "latitude": lat,
+                "longitude": lng,
+                "business_category": business_category
+            })
+
         return Response({
             "status": "success",
             "report": report,
@@ -220,20 +382,17 @@ def generate_feasibility(request):
         }, status=status.HTTP_200_OK)
 
     except Exception as e:
-        logger.error(f"Advisory generation failed: {e}")
+        logger.exception("Advisory generation failed:")
+        print(f"\n[Generate Feasibility Error]: {e}\n")
         return Response({
             "status": "error",
-            "message": str(e)
+            "message": f"Feasibility generation failed: {str(e)}"
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # --- 5. Integrated Pipeline: Full Evaluation ---
 @api_view(['POST'])
 def full_feasibility_evaluation(request):
-    """
-    Unified pipeline executing calculations, spatial competitor queries, 
-    and Mistral AI evaluation in a single round-trip.
-    """
     data = request.data or {}
     try:
         margin = float(data.get('margin_capital', 50000))
@@ -242,14 +401,15 @@ def full_feasibility_evaluation(request):
     except (ValueError, TypeError):
         margin, lat, lng = 50000.0, 23.0673, 87.3163
 
-    category = str(data.get('category') or data.get('business_type') or 'dairy').lower()
+    category = str(data.get('category') or data.get('business_type') or 'grocery').lower()
     village = data.get('village') or data.get('village_name') or 'Bishnupur'
     block = data.get('block') or data.get('block_name') or 'Bishnupur'
     district = data.get('district') or data.get('district_name') or 'Bankura'
+    state = data.get('state', '')
     language = data.get('language', 'en')
 
-    # 1. Deterministic Financials
-    fin_data = serialize_structure(calc_structure_loan(margin))
+    # 1. Deterministic Financials & Amortization
+    fin_data = compute_deterministic_financials(margin)
 
     # 2. OSM Live Competitors
     radius_km = 10.0
@@ -288,18 +448,19 @@ def full_feasibility_evaluation(request):
     except Exception as e:
         logger.warning(f"Overpass pipeline query failed: {e}")
 
-    sat_calc = saturation_index(len(competitors))
-    saturation_level = sat_calc if isinstance(sat_calc, str) else sat_calc.get("level", "MODERATE")
+    comp_count = len(competitors)
+    saturation_level = get_saturation_label(comp_count)
 
     # 3. AI Advisory
     geo_data = {
         "village": village,
         "block": block,
         "district": district,
+        "state": state,
         "latitude": lat,
         "longitude": lng,
-        "competitor_count_10km": len(competitors),
-        "competitor_count": len(competitors),
+        "competitor_count_10km": comp_count,
+        "competitor_count": comp_count,
         "saturation_level": saturation_level
     }
     
@@ -310,13 +471,39 @@ def full_feasibility_evaluation(request):
         language=language
     )
 
+    if isinstance(ai_report, dict):
+        ai_report.update({
+            "margin_capital": fin_data["margin_capital"],
+            "total_project_cost": fin_data["total_project_cost"],
+            "loan_amount": fin_data["loan_amount"],
+            "monthly_emi": fin_data["monthly_emi"],
+            "total_interest": fin_data["total_interest"],
+            "total_repayment": fin_data["total_repayment"],
+            "amortization_schedule": fin_data["amortization_schedule"],
+            "chart_data": fin_data["chart_data"],
+            "interest_rate_pa": fin_data["interest_rate_pa"],
+            "tenure_years": fin_data["tenure_years"],
+            "moratorium_months": fin_data["moratorium_months"],
+            "scheme_name": fin_data["scheme_name"],
+            "competitor_count": comp_count,
+            "competitor_count_10km": comp_count,
+            "saturation_level": saturation_level,
+            "village": village,
+            "block": block,
+            "district": district,
+            "state": state,
+            "latitude": lat,
+            "longitude": lng,
+            "business_category": category
+        })
+
     return Response({
         "status": "success",
         "financials": fin_data,
         "geography": {
             "center": {"lat": lat, "lng": lng, "lon": lng},
             "radius_km": radius_km,
-            "competitor_count": len(competitors),
+            "competitor_count": comp_count,
             "saturation_level": saturation_level,
             "competitors": competitors
         },
