@@ -1,49 +1,65 @@
+import logging
+import requests
 from django.shortcuts import render
 from django.contrib.auth.models import User
 from django.conf import settings
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
-from google import genai
 
-# --- 1. Finance: Loan Structuring ---
+# Internal Module Imports
+from .calculators import structure_loan as calc_structure_loan, saturation_index
+from .ai_services import generate_ai_feasibility_study
+
+logger = logging.getLogger(__name__)
+
+# OSM Tag Mappings for Rural Competitor Queries
+OSM_CATEGORY_TAGS = {
+    "poultry": '["amenity"~"veterinary|marketplace"]["animal"~"poultry|chicken"]',
+    "dairy": '["shop"~"dairy|farm"]["produce"~"milk"]',
+    "grocery": '["shop"~"convenience|supermarket|general"]',
+    "fertilizer": '["shop"~"agrarian|chemist|farm"]',
+    "handicraft": '["shop"~"craft|artisan|gift"]',
+    "default": '["shop"]'
+}
+
+
+# --- 1. Finance: Deterministic Loan Structuring ---
 @api_view(['POST', 'GET'])
 def structure_loan(request):
-    margin_capital = request.data.get('margin_capital', 50000)
+    """
+    Executes Section 3 deterministic loan structuring via calculators.py.
+    Accepts margin_capital via POST payload or GET query params.
+    """
+    if request.method == 'POST':
+        margin = request.data.get('margin_capital', 50000)
+    else:
+        margin = request.query_params.get('margin_capital', 50000)
+
     try:
-        margin_capital = float(margin_capital)
-    except (ValueError, TypeError):
-        margin_capital = 50000.0
+        structure = calc_structure_loan(margin)
+        res_data = structure.to_dict()
+        res_data["status"] = "success"
+        return Response(res_data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Loan calculation error: {e}")
+        return Response({
+            "status": "error",
+            "message": f"Calculation failed: {str(e)}"
+        }, status=status.HTTP_400_BAD_REQUEST)
 
-    # Prototype financial model: 75% loan assistance, 25% promoter contribution
-    total_project_cost = margin_capital * 4.0
-    loan_amount = total_project_cost * 0.75
-    interest_rate_percent = 8.5
-    tenure_months = 60
-
-    monthly_rate = (interest_rate_percent / 100) / 12
-    emi = (loan_amount * monthly_rate * ((1 + monthly_rate) ** tenure_months)) / (((1 + monthly_rate) ** tenure_months) - 1)
-
-    return Response({
-        "status": "success",
-        "margin_capital": margin_capital,
-        "total_project_cost": round(total_project_cost, 2),
-        "eligible_loan_amount": round(loan_amount, 2),
-        "tenure_months": tenure_months,
-        "annual_interest_rate": f"{interest_rate_percent}%",
-        "estimated_monthly_emi": round(emi, 2),
-        "subsidy_eligible": True
-    })
 
 # --- 2. Auth: OTP / Citizen Login ---
 @api_view(['POST'])
 def otp_login(request):
+    """
+    Citizen login / prototype user verification issuing SimpleJWT tokens.
+    """
     phone_or_user = request.data.get('phone') or request.data.get('username') or 'testuser'
     
-    # Fetch or auto-register prototype user
-    user, _ = User.objects.get_or_create(username=phone_or_user)
-    
-    # Issue SimpleJWT tokens
+    # Auto-register/retrieve prototype user
+    user, _ = User.objects.get_or_create(username=str(phone_or_user))
     refresh = RefreshToken.for_user(user)
     
     return Response({
@@ -54,42 +70,207 @@ def otp_login(request):
             "id": user.id,
             "username": user.username,
         }
-    })
+    }, status=status.HTTP_200_OK)
 
-# --- 3. Advisory: AI Business Feasibility ---
+
+# --- 3. Geo: Competitor Density & Saturation ---
+@api_view(['POST', 'GET'])
+def competitors_density(request):
+    """
+    Queries live Overpass API for POIs within radius around (lat, lng)
+    and computes the saturation index from calculators.py.
+    """
+    params = request.data if request.method == 'POST' else request.query_params
+    
+    lat = float(params.get('latitude', 23.0673))
+    lng = float(params.get('longitude', 87.3163))
+    radius_km = float(params.get('radius_km', 5.0))
+    category = str(params.get('business_type') or params.get('category') or 'grocery').lower()
+
+    radius_meters = int(radius_km * 1000)
+    tag = OSM_CATEGORY_TAGS.get(category, OSM_CATEGORY_TAGS["default"])
+    
+    query = f"""
+    [out:json][timeout:15];
+    (
+      node{tag}(around:{radius_meters},{lat},{lng});
+      way{tag}(around:{radius_meters},{lat},{lng});
+    );
+    out center;
+    """
+    overpass_url = "https://overpass-api.de/api/interpreter"
+
+    competitors = []
+    try:
+        res = requests.post(
+            overpass_url, 
+            data={'data': query}, 
+            headers={'User-Agent': 'GramSetu-GeoService'}, 
+            timeout=10
+        )
+        if res.status_code == 200:
+            elements = res.json().get('elements', [])
+            for item in elements:
+                item_lat = item.get('lat') or item.get('center', {}).get('lat')
+                item_lon = item.get('lon') or item.get('center', {}).get('lon')
+                if item_lat and item_lon:
+                    name = item.get('tags', {}).get('name', f"Nearby {category.capitalize()} Store")
+                    competitors.append({
+                        "id": item['id'],
+                        "name": name,
+                        "lat": item_lat,
+                        "lng": item_lon,
+                        "category": category
+                    })
+    except Exception as e:
+        logger.warning(f"Overpass query failed: {e}. Defaulting to empty competitor pool.")
+
+    sat_metrics = saturation_index(len(competitors), radius_km)
+
+    return Response({
+        "status": "success",
+        "category": category,
+        "center": {"lat": lat, "lng": lng},
+        "radius_km": radius_km,
+        "competitor_count": len(competitors),
+        "saturation_level": sat_metrics["level"],
+        "density_per_sq_km": sat_metrics["density_per_sq_km"],
+        "competitors": competitors
+    }, status=status.HTTP_200_OK)
+
+
+# --- 4. Advisory: AI Business Feasibility ---
 @api_view(['POST'])
 def generate_feasibility(request):
-    prompt = request.data.get('prompt') or request.data.get('query') or 'Assess rural business feasibility.'
+    """
+    Generates structured AI advisory using Google Gemini via ai_services.py.
+    """
+    body = request.data
     
-    api_key = getattr(settings, 'GEMINI_API_KEY', '')
-    if not api_key or api_key == 'dummy_key_for_now':
-        return Response({
-            "status": "demo",
-            "report": "Demo Mode: Set a valid GEMINI_API_KEY in your .env file to generate live AI feasibility insights."
-        })
+    # Financial payload extraction or derivation
+    margin = body.get('margin_capital', 50000)
+    fin_structure = calc_structure_loan(margin).to_dict()
+    
+    geo_data = {
+        "village": body.get('village', 'Bishnupur'),
+        "block": body.get('block', 'Bishnupur'),
+        "district": body.get('district', 'Bankura'),
+        "competitor_count_10km": body.get('competitor_count', 2),
+        "saturation_level": body.get('saturation_level', 'MODERATE')
+    }
+    
+    business_category = body.get('business_category') or body.get('category') or 'Agri-Retail'
+    language = body.get('language', 'en')
 
     try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
+        report = generate_ai_feasibility_study(
+            financial_data=fin_structure,
+            geo_data=geo_data,
+            business_category=business_category,
+            language=language
         )
         return Response({
             "status": "success",
-            "report": response.text
-        })
+            "report": report
+        }, status=status.HTTP_200_OK)
     except Exception as e:
+        logger.error(f"Advisory generation failed: {e}")
         return Response({
             "status": "error",
             "message": str(e)
-        }, status=500)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# --- 4. Catch-All Stub for Any Remaining Endpoints ---
+
+# --- 5. Integrated Pipeline: Full Evaluation ---
+@api_view(['POST'])
+def full_feasibility_evaluation(request):
+    """
+    Unified pipeline executing calculations, spatial competitor queries, 
+    and Gemini AI evaluation in a single round-trip.
+    """
+    data = request.data
+    margin = data.get('margin_capital', 50000)
+    category = str(data.get('category') or data.get('business_type') or 'dairy').lower()
+    lat = float(data.get('latitude', 23.0673))
+    lng = float(data.get('longitude', 87.3163))
+    village = data.get('village', 'Bishnupur')
+    block = data.get('block', 'Bishnupur')
+    district = data.get('district', 'Bankura')
+    language = data.get('language', 'en')
+
+    # 1. Deterministic Financials
+    fin_data = calc_structure_loan(margin).to_dict()
+
+    # 2. OSM Live Competitors
+    radius_km = 5.0
+    radius_meters = int(radius_km * 1000)
+    tag = OSM_CATEGORY_TAGS.get(category, OSM_CATEGORY_TAGS["default"])
+    query = f"""
+    [out:json][timeout:15];
+    (
+      node{tag}(around:{radius_meters},{lat},{lng});
+      way{tag}(around:{radius_meters},{lat},{lng});
+    );
+    out center;
+    """
+    competitors = []
+    try:
+        res = requests.post(
+            "https://overpass-api.de/api/interpreter", 
+            data={'data': query}, 
+            headers={'User-Agent': 'GramSetu-Pipeline'}, 
+            timeout=10
+        )
+        if res.status_code == 200:
+            for item in res.json().get('elements', []):
+                item_lat = item.get('lat') or item.get('center', {}).get('lat')
+                item_lon = item.get('lon') or item.get('center', {}).get('lon')
+                if item_lat and item_lon:
+                    competitors.append({
+                        "id": item['id'],
+                        "name": item.get('tags', {}).get('name', f"Nearby {category.capitalize()} Entity"),
+                        "lat": item_lat,
+                        "lng": item_lon,
+                        "category": category
+                    })
+    except Exception as e:
+        logger.warning(f"Overpass pipeline query failed: {e}")
+
+    sat_metrics = saturation_index(len(competitors), radius_km)
+
+    # 3. AI Advisory
+    geo_data = {
+        "village": village,
+        "block": block,
+        "district": district,
+        "competitor_count_10km": len(competitors),
+        "saturation_level": sat_metrics["level"]
+    }
+    
+    ai_report = generate_ai_feasibility_study(
+        financial_data=fin_data,
+        geo_data=geo_data,
+        business_category=category,
+        language=language
+    )
+
+    return Response({
+        "status": "success",
+        "financials": fin_data,
+        "geography": {
+            "center": {"lat": lat, "lng": lng},
+            "radius_km": radius_km,
+            "competitor_count": len(competitors),
+            "saturation_level": sat_metrics["level"],
+            "density_per_sq_km": sat_metrics["density_per_sq_km"],
+            "competitors": competitors
+        },
+        "advisory": ai_report
+    }, status=status.HTTP_200_OK)
+
+
+# --- 6. Catch-All Stub for Any Missing URL Patterns ---
 def __getattr__(name):
-    """
-    Dynamically catches remaining endpoints in urls.py (such as competitors_density)
-    so routing never throws an AttributeError while endpoints are completed.
-    """
     @api_view(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
     def placeholder_view(request, *args, **kwargs):
         return Response({

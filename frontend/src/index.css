@@ -5,3 +5,30 @@
 body {
   background: #F7F3E8;
 }
+/* frontend/src/index.css */
+
+/* Restrict Leaflet's high default z-indexes from bleeding over modals/navbars */
+/* Clamp Leaflet's aggressive z-index stacking */
+/* frontend/src/index.css */
+
+/* Prevent Leaflet tiles and panes from breaking out */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+/* Force controls and panes below site headers */
+.leaflet-pane,
+.leaflet-top,
+.leaflet-bottom,
+.leaflet-control {
+  z-index: 2 !important;
+}
+
+/* Fix leaflet tile distortion */
+.leaflet-tile-container img {
+  max-width: none !important;
+  max-height: none !important;
+}
