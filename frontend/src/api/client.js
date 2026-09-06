@@ -20,7 +20,7 @@ api.interceptors.response.use(
   (res) => res,
   (error) => {
     const message =
-      error?.response?.data?.message || // Added to match Django placeholder responses
+      error?.response?.data?.message ||
       error?.response?.data?.detail ||
       error?.message ||
       "Something went wrong talking to the server.";
@@ -29,15 +29,25 @@ api.interceptors.response.use(
   }
 );
 
+// Deterministic Loan Structuring
 export const structureLoan = (marginCapital) =>
-  api.post("/finance/structure-loan/", { margin_capital: marginCapital }).then((r) => r.data);
+  api
+    .post("/finance/structure-loan/", { margin_capital: marginCapital })
+    .then((r) => r.data);
 
+// Live Competitor Density & Saturation Mapping (Overpass OSM)
 export const competitorsDensity = (payload) =>
-  api.post("/geo/competitors-density/", payload).then((r) => r.data);
+  api.post("/competitors/density/", payload).then((r) => r.data);
 
+// AI Feasibility Study (Mistral Structured Output)
 export const generateFeasibility = (payload) =>
-  api.post("/advisory/generate-feasibility/", payload).then((r) => r.data);
+  api.post("/feasibility/generate/", payload).then((r) => r.data);
 
+// Single-Roundtrip Full Feasibility Evaluation
+export const fullFeasibilityEvaluation = (payload) =>
+  api.post("/feasibility/evaluate/", payload).then((r) => r.data);
+
+// Citizen Authentication / User Token Generation
 export const otpLogin = (payload) =>
   api.post("/auth/otp-login/", payload).then((r) => r.data);
 

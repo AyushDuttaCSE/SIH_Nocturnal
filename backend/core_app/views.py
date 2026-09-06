@@ -1,8 +1,7 @@
 import logging
 import requests
-from django.shortcuts import render
+from dataclasses import is_dataclass, asdict
 from django.contrib.auth.models import User
-from django.conf import settings
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
@@ -21,8 +20,28 @@ OSM_CATEGORY_TAGS = {
     "grocery": '["shop"~"convenience|supermarket|general"]',
     "fertilizer": '["shop"~"agrarian|chemist|farm"]',
     "handicraft": '["shop"~"craft|artisan|gift"]',
+    "tailor": '["shop"~"tailor|clothes|boutique"]',
+    "bakery": '["shop"~"bakery|pastry"]',
+    "salon": '["shop"~"hairdresser|beauty"]',
+    "electronics": '["shop"~"electronics|mobile_phone"]',
+    "hardware": '["shop"~"hardware|doityourself"]',
     "default": '["shop"]'
 }
+
+
+def serialize_structure(obj):
+    """Safely converts dataclasses, Pydantic models, or objects with to_dict() into dicts."""
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if is_dataclass(obj):
+        return asdict(obj)
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return dict(obj)
 
 
 # --- 1. Finance: Deterministic Loan Structuring ---
@@ -38,8 +57,9 @@ def structure_loan(request):
         margin = request.query_params.get('margin_capital', 50000)
 
     try:
+        margin = float(margin)
         structure = calc_structure_loan(margin)
-        res_data = structure.to_dict()
+        res_data = serialize_structure(structure)
         res_data["status"] = "success"
         return Response(res_data, status=status.HTTP_200_OK)
     except Exception as e:
@@ -82,13 +102,16 @@ def competitors_density(request):
     """
     params = request.data if request.method == 'POST' else request.query_params
     
-    lat = float(params.get('latitude', 23.0673))
-    lng = float(params.get('longitude', 87.3163))
-    radius_km = float(params.get('radius_km', 5.0))
-    category = str(params.get('business_type') or params.get('category') or 'grocery').lower()
+    try:
+        lat = float(params.get('latitude') or params.get('center_lat') or 23.0673)
+        lng = float(params.get('longitude') or params.get('center_lng') or 87.3163)
+        radius_km = float(params.get('radius_km', 10.0))
+    except (ValueError, TypeError):
+        lat, lng, radius_km = 23.0673, 87.3163, 10.0
 
+    category_key = str(params.get('business_type') or params.get('category') or 'grocery').lower()
     radius_meters = int(radius_km * 1000)
-    tag = OSM_CATEGORY_TAGS.get(category, OSM_CATEGORY_TAGS["default"])
+    tag = OSM_CATEGORY_TAGS.get(category_key, OSM_CATEGORY_TAGS["default"])
     
     query = f"""
     [out:json][timeout:15];
@@ -105,7 +128,7 @@ def competitors_density(request):
         res = requests.post(
             overpass_url, 
             data={'data': query}, 
-            headers={'User-Agent': 'GramSetu-GeoService'}, 
+            headers={'User-Agent': 'GramSetu-GeoService/1.0'}, 
             timeout=10
         )
         if res.status_code == 200:
@@ -114,27 +137,29 @@ def competitors_density(request):
                 item_lat = item.get('lat') or item.get('center', {}).get('lat')
                 item_lon = item.get('lon') or item.get('center', {}).get('lon')
                 if item_lat and item_lon:
-                    name = item.get('tags', {}).get('name', f"Nearby {category.capitalize()} Store")
+                    name = item.get('tags', {}).get('name', f"Nearby {category_key.capitalize()} Outlet")
                     competitors.append({
                         "id": item['id'],
+                        "osm_id": item['id'],
                         "name": name,
                         "lat": item_lat,
+                        "lon": item_lon,
                         "lng": item_lon,
-                        "category": category
+                        "category": category_key
                     })
     except Exception as e:
-        logger.warning(f"Overpass query failed: {e}. Defaulting to empty competitor pool.")
+        logger.warning(f"Overpass query failed: {e}. Falling back to empty competitor pool.")
 
-    sat_metrics = saturation_index(len(competitors), radius_km)
+    sat_calc = saturation_index(len(competitors))
+    saturation_level = sat_calc if isinstance(sat_calc, str) else sat_calc.get("level", "MODERATE")
 
     return Response({
         "status": "success",
-        "category": category,
-        "center": {"lat": lat, "lng": lng},
+        "category": category_key,
+        "center": {"lat": lat, "lng": lng, "lon": lng},
         "radius_km": radius_km,
         "competitor_count": len(competitors),
-        "saturation_level": sat_metrics["level"],
-        "density_per_sq_km": sat_metrics["density_per_sq_km"],
+        "saturation_level": saturation_level,
         "competitors": competitors
     }, status=status.HTTP_200_OK)
 
@@ -143,23 +168,41 @@ def competitors_density(request):
 @api_view(['POST'])
 def generate_feasibility(request):
     """
-    Generates structured AI advisory using Google Gemini via ai_services.py.
+    Generates structured AI advisory using Mistral AI via ai_services.py.
+    Directly serves the frontend App.jsx generateFeasibility() call.
     """
-    body = request.data
+    body = request.data or {}
     
     # Financial payload extraction or derivation
-    margin = body.get('margin_capital', 50000)
-    fin_structure = calc_structure_loan(margin).to_dict()
+    try:
+        margin = float(body.get('margin_capital', 50000))
+    except (ValueError, TypeError):
+        margin = 50000.0
+
+    fin_structure = serialize_structure(calc_structure_loan(margin))
     
+    comp_count = int(body.get('competitor_count') or body.get('competitor_count_10km') or 0)
+    sat_level = body.get('saturation_level') or saturation_index(comp_count)
+    if isinstance(sat_level, dict):
+        sat_level = sat_level.get("level", "MODERATE")
+
     geo_data = {
-        "village": body.get('village', 'Bishnupur'),
-        "block": body.get('block', 'Bishnupur'),
-        "district": body.get('district', 'Bankura'),
-        "competitor_count_10km": body.get('competitor_count', 2),
-        "saturation_level": body.get('saturation_level', 'MODERATE')
+        "village": body.get('village') or body.get('village_name') or 'Bishnupur',
+        "block": body.get('block') or body.get('block_name') or 'Bishnupur',
+        "district": body.get('district') or body.get('district_name') or 'Bankura',
+        "latitude": body.get('latitude') or body.get('center_lat') or 23.0708,
+        "longitude": body.get('longitude') or body.get('center_lng') or 87.3167,
+        "competitor_count_10km": comp_count,
+        "competitor_count": comp_count,
+        "saturation_level": sat_level
     }
     
-    business_category = body.get('business_category') or body.get('category') or 'Agri-Retail'
+    business_category = (
+        body.get('business_category') 
+        or body.get('category_code') 
+        or body.get('category') 
+        or 'Agri-Retail'
+    )
     language = body.get('language', 'en')
 
     try:
@@ -171,8 +214,11 @@ def generate_feasibility(request):
         )
         return Response({
             "status": "success",
-            "report": report
+            "report": report,
+            "finance": fin_structure,
+            "geography": geo_data
         }, status=status.HTTP_200_OK)
+
     except Exception as e:
         logger.error(f"Advisory generation failed: {e}")
         return Response({
@@ -186,23 +232,27 @@ def generate_feasibility(request):
 def full_feasibility_evaluation(request):
     """
     Unified pipeline executing calculations, spatial competitor queries, 
-    and Gemini AI evaluation in a single round-trip.
+    and Mistral AI evaluation in a single round-trip.
     """
-    data = request.data
-    margin = data.get('margin_capital', 50000)
+    data = request.data or {}
+    try:
+        margin = float(data.get('margin_capital', 50000))
+        lat = float(data.get('latitude') or data.get('center_lat') or 23.0673)
+        lng = float(data.get('longitude') or data.get('center_lng') or 87.3163)
+    except (ValueError, TypeError):
+        margin, lat, lng = 50000.0, 23.0673, 87.3163
+
     category = str(data.get('category') or data.get('business_type') or 'dairy').lower()
-    lat = float(data.get('latitude', 23.0673))
-    lng = float(data.get('longitude', 87.3163))
-    village = data.get('village', 'Bishnupur')
-    block = data.get('block', 'Bishnupur')
-    district = data.get('district', 'Bankura')
+    village = data.get('village') or data.get('village_name') or 'Bishnupur'
+    block = data.get('block') or data.get('block_name') or 'Bishnupur'
+    district = data.get('district') or data.get('district_name') or 'Bankura'
     language = data.get('language', 'en')
 
     # 1. Deterministic Financials
-    fin_data = calc_structure_loan(margin).to_dict()
+    fin_data = serialize_structure(calc_structure_loan(margin))
 
     # 2. OSM Live Competitors
-    radius_km = 5.0
+    radius_km = 10.0
     radius_meters = int(radius_km * 1000)
     tag = OSM_CATEGORY_TAGS.get(category, OSM_CATEGORY_TAGS["default"])
     query = f"""
@@ -218,7 +268,7 @@ def full_feasibility_evaluation(request):
         res = requests.post(
             "https://overpass-api.de/api/interpreter", 
             data={'data': query}, 
-            headers={'User-Agent': 'GramSetu-Pipeline'}, 
+            headers={'User-Agent': 'GramSetu-Pipeline/1.0'}, 
             timeout=10
         )
         if res.status_code == 200:
@@ -228,23 +278,29 @@ def full_feasibility_evaluation(request):
                 if item_lat and item_lon:
                     competitors.append({
                         "id": item['id'],
+                        "osm_id": item['id'],
                         "name": item.get('tags', {}).get('name', f"Nearby {category.capitalize()} Entity"),
                         "lat": item_lat,
+                        "lon": item_lon,
                         "lng": item_lon,
                         "category": category
                     })
     except Exception as e:
         logger.warning(f"Overpass pipeline query failed: {e}")
 
-    sat_metrics = saturation_index(len(competitors), radius_km)
+    sat_calc = saturation_index(len(competitors))
+    saturation_level = sat_calc if isinstance(sat_calc, str) else sat_calc.get("level", "MODERATE")
 
     # 3. AI Advisory
     geo_data = {
         "village": village,
         "block": block,
         "district": district,
+        "latitude": lat,
+        "longitude": lng,
         "competitor_count_10km": len(competitors),
-        "saturation_level": sat_metrics["level"]
+        "competitor_count": len(competitors),
+        "saturation_level": saturation_level
     }
     
     ai_report = generate_ai_feasibility_study(
@@ -258,13 +314,13 @@ def full_feasibility_evaluation(request):
         "status": "success",
         "financials": fin_data,
         "geography": {
-            "center": {"lat": lat, "lng": lng},
+            "center": {"lat": lat, "lng": lng, "lon": lng},
             "radius_km": radius_km,
             "competitor_count": len(competitors),
-            "saturation_level": sat_metrics["level"],
-            "density_per_sq_km": sat_metrics["density_per_sq_km"],
+            "saturation_level": saturation_level,
             "competitors": competitors
         },
+        "report": ai_report,
         "advisory": ai_report
     }, status=status.HTTP_200_OK)
 
