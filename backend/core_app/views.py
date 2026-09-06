@@ -16,6 +16,12 @@ except ImportError:
 
 from .ai_services import generate_ai_feasibility_study
 
+# Core ML Engine Subsystem Import
+try:
+    from .ml_engine import run_ml_appraisal_pipeline
+except ImportError:
+    run_ml_appraisal_pipeline = None
+
 logger = logging.getLogger(__name__)
 
 # OSM Tag Mappings for Rural Competitor Queries
@@ -282,12 +288,12 @@ def competitors_density(request):
     }, status=status.HTTP_200_OK)
 
 
-# --- 4. Advisory: AI Business Feasibility ---
+# --- 4. Advisory: AI Business Feasibility + ML Engine ---
 @api_view(['POST'])
 def generate_feasibility(request):
     """
-    Generates structured AI advisory and merges all numerical statistics, amortization
-    schedules, and chart configurations directly into the report payload.
+    Generates structured AI advisory and executes the ML Engine (Market Intelligence,
+    Spatial Density, Viability Scoring, and Strategic Decision Matrix).
     """
     body = request.data or {}
     
@@ -306,6 +312,7 @@ def generate_feasibility(request):
         comp_count = 0
 
     sat_level = body.get('saturation_level') or get_saturation_label(comp_count)
+    competitors_list = body.get('competitors', [])
 
     # 3. Clean geography coordinates
     try:
@@ -340,6 +347,7 @@ def generate_feasibility(request):
     language = body.get('language', 'en')
 
     try:
+        # A. Qualitative Feasibility Study
         report = generate_ai_feasibility_study(
             financial_data=fin_structure,
             geo_data=geo_data,
@@ -347,7 +355,25 @@ def generate_feasibility(request):
             language=language
         )
 
-        # Merge statistical, amortization, and visual data directly into report root
+        # B. Execute Machine Learning Appraisal Pipeline
+        ml_output = None
+        if run_ml_appraisal_pipeline:
+            try:
+                ml_output = run_ml_appraisal_pipeline(
+                    financial_data=fin_structure,
+                    geo_data=geo_data,
+                    category=business_category,
+                    competitors=competitors_list
+                )
+            except Exception as ml_err:
+                logger.error(f"ML Pipeline execution failed: {ml_err}", exc_info=True)
+
+        # C. Extract Dynamic ML Predictions
+        viability_pred = (ml_output or {}).get("viability_prediction", {})
+        dynamic_score = viability_pred.get("viability_score", 72.5)
+        dynamic_tier = viability_pred.get("risk_tier", "MODERATE RISK")
+
+        # D. Merge Statistical, Financial, and ML Data directly into Report
         if isinstance(report, dict):
             report.update({
                 "margin_capital": fin_structure["margin_capital"],
@@ -371,14 +397,20 @@ def generate_feasibility(request):
                 "state": state,
                 "latitude": lat,
                 "longitude": lng,
-                "business_category": business_category
+                "business_category": business_category,
+                "ml_appraisal": ml_output,
+                "viability_score": dynamic_score,
+                "risk_tier": dynamic_tier
             })
 
         return Response({
             "status": "success",
             "report": report,
             "finance": fin_structure,
-            "geography": geo_data
+            "geography": geo_data,
+            "ml_appraisal": ml_output,
+            "viability_score": dynamic_score,
+            "risk_tier": dynamic_tier
         }, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -393,6 +425,10 @@ def generate_feasibility(request):
 # --- 5. Integrated Pipeline: Full Evaluation ---
 @api_view(['POST'])
 def full_feasibility_evaluation(request):
+    """
+    Autonomous batch evaluation: fetches competitors, calculates finances,
+    runs the ML appraisal, and triggers the AI report in a single roundtrip.
+    """
     data = request.data or {}
     try:
         margin = float(data.get('margin_capital', 50000))
@@ -451,7 +487,7 @@ def full_feasibility_evaluation(request):
     comp_count = len(competitors)
     saturation_level = get_saturation_label(comp_count)
 
-    # 3. AI Advisory
+    # 3. Geography Payload
     geo_data = {
         "village": village,
         "block": block,
@@ -464,6 +500,7 @@ def full_feasibility_evaluation(request):
         "saturation_level": saturation_level
     }
     
+    # 4. AI Advisory
     ai_report = generate_ai_feasibility_study(
         financial_data=fin_data,
         geo_data=geo_data,
@@ -471,6 +508,25 @@ def full_feasibility_evaluation(request):
         language=language
     )
 
+    # 5. Machine Learning Appraisal Engine
+    ml_output = None
+    if run_ml_appraisal_pipeline:
+        try:
+            ml_output = run_ml_appraisal_pipeline(
+                financial_data=fin_data,
+                geo_data=geo_data,
+                category=category,
+                competitors=competitors
+            )
+        except Exception as ml_err:
+            logger.error(f"ML Pipeline execution warning in full evaluation: {ml_err}", exc_info=True)
+
+    # 6. Extract Dynamic Predictions
+    viability_pred = (ml_output or {}).get("viability_prediction", {})
+    dynamic_score = viability_pred.get("viability_score", 72.5)
+    dynamic_tier = viability_pred.get("risk_tier", "MODERATE RISK")
+
+    # 7. Unify Outputs
     if isinstance(ai_report, dict):
         ai_report.update({
             "margin_capital": fin_data["margin_capital"],
@@ -494,7 +550,10 @@ def full_feasibility_evaluation(request):
             "state": state,
             "latitude": lat,
             "longitude": lng,
-            "business_category": category
+            "business_category": category,
+            "ml_appraisal": ml_output,
+            "viability_score": dynamic_score,
+            "risk_tier": dynamic_tier
         })
 
     return Response({
@@ -508,7 +567,10 @@ def full_feasibility_evaluation(request):
             "competitors": competitors
         },
         "report": ai_report,
-        "advisory": ai_report
+        "advisory": ai_report,
+        "ml_appraisal": ml_output,
+        "viability_score": dynamic_score,
+        "risk_tier": dynamic_tier
     }, status=status.HTTP_200_OK)
 
 

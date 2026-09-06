@@ -32,7 +32,7 @@ api.interceptors.response.use(
       "Something went wrong talking to the server.";
 
     console.error(`[API Error] Status: ${status} | Route: ${url} | Message:`, message);
-    
+
     // Attach response data directly to error for cleaner downstream inspection
     const enhancedError = new Error(message);
     enhancedError.response = error.response;
@@ -57,23 +57,61 @@ async function postWithFallback(primaryPath, fallbackPath, payload) {
   }
 }
 
-// Deterministic Loan Structuring
+// 1. Deterministic Loan Structuring
 export const structureLoan = (marginCapital) =>
-  postWithFallback("/finance/structure-loan/", "/structure-loan/", { margin_capital: marginCapital });
+  postWithFallback("/finance/structure-loan/", "/structure-loan/", {
+    margin_capital: typeof marginCapital === "object" ? marginCapital.margin_capital : marginCapital,
+  });
 
-// Live Competitor Density & Saturation Mapping (Overpass OSM)
+// 2. Live Competitor Density & Saturation Mapping (Overpass OSM)
 export const competitorsDensity = (payload) =>
-  postWithFallback("/competitors/density/", "/competitors-density/", payload);
+  postWithFallback("/competitors/density/", "/competitors-density/", {
+    latitude: payload.latitude ?? payload.lat,
+    longitude: payload.longitude ?? payload.lng ?? payload.lon,
+    category: payload.category || payload.business_type || "grocery",
+    business_type: payload.business_type || payload.category || "grocery",
+    radius_km: payload.radius_km || 10,
+  });
 
-// AI Feasibility Study (Mistral Structured Output)
+// 3. AI Feasibility Study & ML Appraisal Pipeline
 export const generateFeasibility = (payload) =>
-  postWithFallback("/feasibility/generate/", "/feasibility/", payload);
+  postWithFallback("/feasibility/generate/", "/feasibility/", {
+    village: payload.village || payload.village_name || "Local Area",
+    block: payload.block || payload.block_name || "Local Block",
+    district: payload.district || payload.district_name || "Local District",
+    state: payload.state || "",
+    latitude: payload.latitude ?? payload.lat,
+    longitude: payload.longitude ?? payload.lng ?? payload.lon,
+    margin_capital: payload.margin_capital ?? payload.margin ?? 50000,
+    business_category: payload.business_category || payload.category || "GROCERY",
+    category_code: payload.category_code || payload.category || "GROCERY",
+    competitor_count: payload.competitor_count ?? 0,
+    saturation_level: payload.saturation_level || "MODERATE",
+    language: payload.language || "en",
+    // Forward raw POI coordinate array for ML spatial clustering & nearest-neighbor math
+    competitors: payload.competitors || [],
+  });
 
-// Single-Roundtrip Full Feasibility Evaluation
+// 4. Single-Roundtrip Full Feasibility Evaluation
 export const fullFeasibilityEvaluation = (payload) =>
-  postWithFallback("/feasibility/evaluate/", "/feasibility-evaluate/", payload);
+  postWithFallback("/feasibility/evaluate/", "/feasibility-evaluate/", {
+    village: payload.village || payload.village_name,
+    block: payload.block || payload.block_name,
+    district: payload.district || payload.district_name,
+    state: payload.state || "",
+    latitude: payload.latitude ?? payload.lat,
+    longitude: payload.longitude ?? payload.lng ?? payload.lon,
+    margin_capital: payload.margin_capital ?? payload.margin ?? 50000,
+    category: payload.category || payload.business_type || "grocery",
+    business_type: payload.business_type || payload.category || "grocery",
+    language: payload.language || "en",
+  });
 
-// Citizen Authentication / User Token Generation
+// 5. Standalone ML Intelligence & Viability Scoring Endpoint (Optional utility)
+export const evaluateMLIntelligence = (payload) =>
+  postWithFallback("/ml/evaluate/", "/evaluate-ml/", payload);
+
+// 6. Citizen Authentication / User Token Generation
 export const otpLogin = (payload) =>
   postWithFallback("/auth/otp-login/", "/otp-login/", payload);
 

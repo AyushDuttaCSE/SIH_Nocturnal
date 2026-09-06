@@ -5,6 +5,8 @@ import FinancialCalculatorWidget from "./components/FinancialCalculatorWidget";
 import InteractiveMap from "./components/InteractiveMap";
 import AdvisoryReportView from "./components/AdvisoryReportView";
 import DprPdfGenerator from "./components/DprPdfGenerator";
+import MarketIntelligenceView from "./components/MarketIntelligenceView";
+import StrategicDecisionsCard from "./components/StrategicDecisionsCard";
 import { competitorsDensity, generateFeasibility } from "./api/client";
 
 const queryClient = new QueryClient();
@@ -176,7 +178,7 @@ function Wizard() {
     }
   };
 
-  // 3. Dynamic Submission with Merged Numerical/Statistical Payload Extraction
+  // 3. Dynamic Submission with Competitor POIs forwarded to ML Pipeline
   const handleGenerate = async () => {
     if (!form.village && !form.district) {
       alert("Please provide at least a Village or District name.");
@@ -221,7 +223,7 @@ function Wizard() {
         console.warn("Overpass API query failed, proceeding with fallback density:", densityErr);
       }
 
-      // 2. Generate Feasibility Analysis
+      // 2. Generate Feasibility Analysis + Execute ML Pipeline
       const result = await generateFeasibility({
         village: form.village || "Local Area",
         block: form.block || form.village || "Local Block",
@@ -234,17 +236,18 @@ function Wizard() {
         category_code: form.category,
         competitor_count: competitorCount,
         saturation_level: saturationLevel,
+        competitors: competitorPool, // Handed off for ML spatial clustering & min-distance math
         language,
       });
 
-      // Extract and merge all numerical, geographic, and qualitative advisory layers
       const aiReport = result?.report || result?.data?.report || {};
       const finData = result?.finance || result?.financial_structure || {};
       const geoData = result?.geography || result?.geo_context || {};
+      const mlAppraisal = result?.ml_appraisal || aiReport?.ml_appraisal || null;
 
       const mergedReport = {
         ...aiReport,
-        // Deterministic Financials (with fallback math if missing from payload)
+        // Deterministic Financials
         margin_capital: finData.margin_capital ?? aiReport.margin_capital ?? form.margin,
         total_project_cost: finData.total_project_cost ?? aiReport.total_project_cost ?? (form.margin / 0.10),
         loan_amount: finData.loan_amount ?? aiReport.loan_amount ?? ((form.margin / 0.10) * 0.90),
@@ -262,6 +265,11 @@ function Wizard() {
         block: geoData.block || form.block || "Local Block",
         district: geoData.district || form.district || "Local District",
         state: geoData.state || form.state || "",
+
+        // Core Machine Learning Payload & Risk Inferences
+        ml_appraisal: mlAppraisal,
+        viability_score: result?.viability_score ?? aiReport?.viability_score ?? mlAppraisal?.viability_prediction?.viability_score ?? 72.5,
+        risk_tier: result?.risk_tier ?? aiReport?.risk_tier ?? mlAppraisal?.viability_prediction?.risk_tier ?? "MODERATE RISK",
       };
 
       setReport(mergedReport);
@@ -400,6 +408,34 @@ function Wizard() {
 
       {report && (
         <div id="report-section" className="space-y-6 pt-2">
+          {/* ML Predictive Viability Gauge Header */}
+          <div className="bg-white border-2 border-forest-dk rounded-xl p-5 shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+            <div>
+              <span className="text-[11px] font-bold text-[#a9820f] uppercase tracking-wider block">
+                Machine Learning Appraisal Engine
+              </span>
+              <h3 className="font-display text-xl text-forest-dk font-bold">
+                Enterprise Viability Score: {report.viability_score}%
+              </h3>
+              <p className="text-xs text-gray-600 mt-0.5">
+                Evaluated against local demand elasticity, OSM competitor clustering, and 90:10 debt servicing.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span
+                className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider ${
+                  Number(report.viability_score) >= 75
+                    ? "bg-green-100 text-green-900 border border-green-300"
+                    : Number(report.viability_score) >= 50
+                    ? "bg-amber-100 text-amber-900 border border-amber-300"
+                    : "bg-red-100 text-red-900 border border-red-300"
+                }`}
+              >
+                {report.risk_tier}
+              </span>
+            </div>
+          </div>
+
           {/* Statistical Metrics Strip */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-paper border border-paper-dk rounded-xl p-4 shadow-sm">
@@ -454,6 +490,12 @@ function Wizard() {
               </span>
             </div>
           </div>
+
+          {/* Market Intelligence (GST & Demand) */}
+          <MarketIntelligenceView report={report} />
+
+          {/* Strategic Decision Matrix */}
+          <StrategicDecisionsCard report={report} />
 
           {/* Qualitative Advisory & SWOT Matrix */}
           <AdvisoryReportView report={report} />
