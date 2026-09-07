@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RBAS-Rural Business Advisory System</title>
+
+    <!-- Google Fonts: Inter, Fraunces & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Leaflet CSS for map styling -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Step 6: Future Scope -->
+    <div class="panel">
+      <h2><span class="step-num">4</span><span data-i18n="future_title">Future Scope & Roadmap</span></h2>
+      <p class="sub" data-i18n="future_sub">Planned enhancements to expand AI capabilities, API integrations, and ecosystem connectivity.</p>
+      
+      <div class="grid2">
+        <div style="background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:16px;">
+          <h3 style="margin-top:0; font-size:15px; color:var(--forest); font-weight:600;">🎙️ Vernacular Voice & Dialect AI</h3>
+          <p style="font-size:13.5px; line-height:1.5; color:#4a4636; margin:0;">
+            Integrating speech-to-text in regional Indian languages and local dialects to make business advisory accessible to non-literate rural entrepreneurs.
+          </p>
+        </div>
+        
+        <div style="background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:16px;">
+          <h3 style="margin-top:0; font-size:15px; color:var(--forest); font-weight:600;">🏛️ Direct SCA & Bank Portal Integration</h3>
+          <p style="font-size:13.5px; line-height:1.5; color:#4a4636; margin:0;">
+            Direct API submission of the generated DPR to PMEGP, Mudra, and State Channelising Agency (SCA) portals for instant loan sanction processing.
+          </p>
+        </div>
+
+        <div style="background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:16px;">
+          <h3 style="margin-top:0; font-size:15px; color:var(--forest); font-weight:600;">📈 Live Mandi & Price Feeds</h3>
+          <p style="font-size:13.5px; line-height:1.5; color:#4a4636; margin:0;">
+            Incorporating real-time commodity prices and seasonal agricultural trend forecasting from e-NAM to dynamically optimize pricing strategies.
+          </p>
+        </div>
+
+        <div style="background:var(--paper); border:1px solid var(--line); border-radius:10px; padding:16px;">
+          <h3 style="margin-top:0; font-size:15px; color:var(--forest); font-weight:600;">🤝 SHG & Supply Chain Aggregation</h3>
+          <p style="font-size:13.5px; line-height:1.5; color:#4a4636; margin:0;">
+            Linking micro-enterprises with local Self-Help Groups (SHGs) and wholesale distributors to reduce logistics costs via group purchasing power.
+          </p>
+        </div>
+      </div>
+    </div>
+    <div class="chat-container">
+    <!-- Header with Bot Avatar -->
+    <div class="chat-header">
+      <img src="https://api.iconify.design/lucide:bot.svg?color=%23ffffff" alt="Bot Icon" id="bot-header-icon" />
+      <div>
+        <h3 style="margin: 0; font-size: 16px;">RBAS Sahayak</h3>
+        <small style="color: #D4A62A;">Online | AI Rural Business Advisory</small>
+      </div>
+    </div>
+
+    <!-- Message Window -->
+    <div class="chat-messages" id="chat-messages">
+      <div class="message bot">
+        <img class="avatar" src="https://api.iconify.design/lucide:bot.svg?color=%231F4D3C" alt="Bot" />
+        <div class="bubble">Namaste! How can I assist you with GramSetu micro-credit or rural services today?</div>
+      </div>
+    </div>
+
+    <!-- Input Box -->
+    <div class="chat-input">
+      <input type="text" id="user-input" placeholder="Type your message..." onkeypress="handleKeyPress(event)" />
+      <button onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+    <script>
+    // 1. Target Endpoint URL
+    const API_URL = 'http://127.0.0.1:8000/chat/'; 
+    
+    // 2. Bot Avatar URL
+    const BOT_AVATAR = 'https://api.iconify.design/lucide:bot.svg?color=%231F4D3C';
+
+    // 3. Store Session ID locally across turns
+    let sessionId = localStorage.getItem('gramsetu_session_id') || null;
+
+    async function sendMessage() {
+      const inputEl = document.getElementById('user-input');
+      const message = inputEl.value.trim();
+      
+      if (!message) return;
+
+      // Render User Message in UI
+      appendMessage(message, 'user');
+      inputEl.value = '';
+
+      try {
+        // Send POST Request to Django REST Endpoint
+        const response = await fetch(API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: message,
+            session_id: sessionId
+          })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.status === 'success') {
+          // Persist Session ID for Chat History continuity
+          if (data.session_id) {
+            sessionId = data.session_id;
+            localStorage.setItem('gramsetu_session_id', sessionId);
+          }
+
+          // Render Bot Response in UI
+          appendMessage(data.reply, 'bot');
+        } else {
+          appendMessage('Sorry, something went wrong. Please try again.', 'bot');
+        }
+      } catch (error) {
+        console.error('API Error:', error);
+        appendMessage('Unable to connect to the backend server.', 'bot');
+      }
+    }
+
+    function appendMessage(text, sender) {
+      const chatContainer = document.getElementById('chat-messages');
+      const messageDiv = document.createElement('div');
+      messageDiv.classList.add('message', sender);
+
+      if (sender === 'bot') {
+        messageDiv.innerHTML = `
+          <img class="avatar" src="${BOT_AVATAR}" alt="Bot" />
+          <div class="bubble">${text}</div>
+        `;
+      } else {
+        messageDiv.innerHTML = `
+          <div class="bubble">${text}</div>
+        `;
+      }
+
+      chatContainer.appendChild(messageDiv);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    function handleKeyPress(e) {
+      if (e.key === 'Enter') {
+        sendMessage();
+      }
+    }
+    </script>
+    
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
