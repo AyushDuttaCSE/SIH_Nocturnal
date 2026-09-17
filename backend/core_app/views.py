@@ -15,6 +15,7 @@ except ImportError:
     saturation_index = None
 
 from .ai_services import generate_ai_feasibility_study
+from .geo_services import get_banks_for_user
 
 # Updated Core ML Engine Subsystem Import
 try:
@@ -181,7 +182,7 @@ def get_saturation_label(comp_count: int) -> str:
                 return sat
         except Exception:
             pass
-            
+
     if comp_count == 0:
         return "LOW"
     elif comp_count <= 3:
@@ -192,7 +193,8 @@ def get_saturation_label(comp_count: int) -> str:
 # --- 1. Finance: Deterministic Loan Structuring ---
 @api_view(['POST', 'GET'])
 def structure_loan(request):
-    margin = request.data.get('margin_capital') if request.method == 'POST' else request.query_params.get('margin_capital')
+    margin = request.data.get('margin_capital') if request.method == 'POST' else request.query_params.get(
+        'margin_capital')
     try:
         margin = float(margin or 50000)
     except (ValueError, TypeError):
@@ -209,7 +211,7 @@ def otp_login(request):
     phone_or_user = request.data.get('phone') or request.data.get('username') or 'testuser'
     user, _ = User.objects.get_or_create(username=str(phone_or_user))
     refresh = RefreshToken.for_user(user)
-    
+
     return Response({
         "status": "authenticated",
         "access": str(refresh.access_token),
@@ -225,7 +227,7 @@ def otp_login(request):
 @api_view(['POST', 'GET'])
 def competitors_density(request):
     params = request.data if request.method == 'POST' else request.query_params
-    
+
     try:
         lat = float(params.get('latitude') or params.get('center_lat') or 23.0673)
         lng = float(params.get('longitude') or params.get('center_lng') or 87.3163)
@@ -236,7 +238,7 @@ def competitors_density(request):
     category_key = str(params.get('business_type') or params.get('category') or 'grocery').lower()
     radius_meters = int(radius_km * 1000)
     tag = OSM_CATEGORY_TAGS.get(category_key, OSM_CATEGORY_TAGS["default"])
-    
+
     query = f"""
     [out:json][timeout:15];
     (
@@ -250,9 +252,9 @@ def competitors_density(request):
     competitors = []
     try:
         res = requests.post(
-            overpass_url, 
-            data={'data': query}, 
-            headers={'User-Agent': 'GramSetu-GeoService/1.0'}, 
+            overpass_url,
+            data={'data': query},
+            headers={'User-Agent': 'GramSetu-GeoService/1.0'},
             timeout=10
         )
         if res.status_code == 200:
@@ -295,7 +297,7 @@ def generate_feasibility(request):
     Spatial Density, Viability Scoring, and Strategic Decision Matrix).
     """
     body = request.data or {}
-    
+
     # 1. Clean margin capital & compute deterministic financials
     try:
         margin = float(body.get('margin_capital', body.get('margin', 50000)))
@@ -303,7 +305,7 @@ def generate_feasibility(request):
         margin = 50000.0
 
     fin_structure = compute_deterministic_financials(margin)
-    
+
     # 2. Clean competitor density & saturation
     try:
         comp_count = int(body.get('competitor_count') or body.get('competitor_count_10km') or 0)
@@ -336,12 +338,12 @@ def generate_feasibility(request):
         "competitor_count": comp_count,
         "saturation_level": sat_level
     }
-    
+
     business_category = (
-        body.get('business_category') 
-        or body.get('category_code') 
-        or body.get('category') 
-        or 'Grocery / General store'
+            body.get('business_category')
+            or body.get('category_code')
+            or body.get('category')
+            or 'Grocery / General store'
     )
     language = body.get('language', 'en')
 
@@ -377,7 +379,7 @@ def generate_feasibility(request):
             ml_confidence = ml_output["ml_result"]["viability_score"]
             ml_recommendation = ml_output["decision"]["ml_recommendation"]
             ml_rationale = ml_output["decision"]["rationale"]
-            
+
             bank_dpr_summary = (
                 f"Automated Scikit-Learn Viability Score: {ml_confidence}%. "
                 f"Enterprise evaluated as {ml_viability} with a "
@@ -414,7 +416,7 @@ def generate_feasibility(request):
                 "longitude": lng,
                 "business_category": business_category,
                 "ml_appraisal": ml_output,
-                
+
                 # Consumed directly by App.jsx & DprPdfGenerator.jsx
                 "ml_viability": ml_viability,
                 "ml_confidence": ml_confidence,
@@ -480,9 +482,9 @@ def full_feasibility_evaluation(request):
     competitors = []
     try:
         res = requests.post(
-            "https://overpass-api.de/api/interpreter", 
-            data={'data': query}, 
-            headers={'User-Agent': 'GramSetu-Pipeline/1.0'}, 
+            "https://overpass-api.de/api/interpreter",
+            data={'data': query},
+            headers={'User-Agent': 'GramSetu-Pipeline/1.0'},
             timeout=10
         )
         if res.status_code == 200:
@@ -517,7 +519,7 @@ def full_feasibility_evaluation(request):
         "competitor_count": comp_count,
         "saturation_level": saturation_level
     }
-    
+
     # 4. AI Advisory
     ai_report = generate_ai_feasibility_study(
         financial_data=fin_data,
@@ -549,7 +551,7 @@ def full_feasibility_evaluation(request):
         ml_confidence = ml_output["ml_result"]["viability_score"]
         ml_recommendation = ml_output["decision"]["ml_recommendation"]
         ml_rationale = ml_output["decision"]["rationale"]
-        
+
         bank_dpr_summary = (
             f"Automated Scikit-Learn Viability Score: {ml_confidence}%. "
             f"Enterprise evaluated as {ml_viability} with a "
@@ -611,7 +613,39 @@ def full_feasibility_evaluation(request):
     }, status=status.HTTP_200_OK)
 
 
-# --- 6. Catch-All Stub for Any Missing URL Patterns ---
+# --- 7. Banks: Nearby Institutional Infrastructure ---
+@api_view(['GET'])
+def nearby_banks_view(request):
+    """
+    Returns nearby bank branches based on user pincode and/or coordinates.
+    """
+    pincode = request.GET.get('pincode', '').strip()
+    lat = request.GET.get('lat', None)
+    lon = request.GET.get('lon', None)
+
+    if not pincode and (lat is None or lon is None):
+        return Response(
+            {"error": "Please provide a pincode or coordinates (lat, lon)."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        lat = float(lat) if lat else None
+        lon = float(lon) if lon else None
+    except ValueError:
+        return Response({"error": "Invalid lat/lon values."}, status=status.HTTP_400_BAD_REQUEST)
+
+    banks = get_banks_for_user(pincode=pincode, lat=lat, lon=lon)
+
+    return Response({
+        "status": "success",
+        "pincode": pincode,
+        "count": len(banks),
+        "banks": banks
+    }, status=status.HTTP_200_OK)
+
+
+# --- 8. Catch-All Stub for Any Missing URL Patterns ---
 def __getattr__(name):
     @api_view(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
     def placeholder_view(request, *args, **kwargs):
@@ -620,4 +654,5 @@ def __getattr__(name):
             "endpoint": name,
             "message": f"Endpoint '{name}' is currently being developed."
         })
+
     return placeholder_view

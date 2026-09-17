@@ -1,4 +1,5 @@
 // frontend/src/api/geo.js
+import apiClient from './client';
 
 const NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
 const HEADERS = { "User-Agent": "GramSetu-App/1.0" };
@@ -52,7 +53,7 @@ export async function forwardGeocode({ village, block, district }) {
   return null;
 }
 
-// Reverse Geocoding: GPS (lat, lon) -> { village, block, district, addressLine }
+// Reverse Geocoding: GPS (lat, lon) -> { village, block, district, addressLine, pincode }
 export async function reverseGeocode(lat, lon) {
   try {
     const res = await fetch(
@@ -66,10 +67,29 @@ export async function reverseGeocode(lat, lon) {
       village: addr.village || addr.hamlet || addr.suburb || addr.town || addr.city || "",
       block: addr.county || addr.subdistrict || "",
       district: addr.state_district || addr.district || addr.city || "",
+      pincode: addr.postcode || "", // Added to auto-feed the bank fetcher
       displayName: data.display_name || ""
     };
   } catch (err) {
     console.error("Reverse geocoding failed:", err);
+    return null;
+  }
+}
+
+// Fetch Nearby Banks from Django Backend
+export async function fetchNearbyBanks(pincode, lat = null, lon = null) {
+  try {
+    const params = {};
+    if (pincode) params.pincode = pincode;
+    if (lat && lon) {
+      params.lat = lat;
+      params.lon = lon;
+    }
+
+    const response = await apiClient.get('/banks/nearby/', { params });
+    return response.data;
+  } catch (err) {
+    console.error("Fetching nearby banks failed:", err);
     return null;
   }
 }

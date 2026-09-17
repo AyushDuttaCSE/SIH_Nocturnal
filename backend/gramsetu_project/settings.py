@@ -120,3 +120,9 @@ SIMPLE_JWT = {
 
 # Safe env extraction (won't crash if missing)
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+
+# Tells Django to use your custom User model instead of the default one
+AUTH_USER_MODEL = 'core_app.User'
+
+# Fixes the primary key warnings (W042)
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

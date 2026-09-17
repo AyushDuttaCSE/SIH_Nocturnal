@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from .views import nearby_banks_view
 
 urlpatterns = [
     # 1. Financial Loan Structuring (Deterministic calculations)
@@ -25,4 +26,6 @@ urlpatterns = [
     # 5. Citizen / User Verification (SimpleJWT)
     path('auth/otp-login/', views.otp_login, name='otp_login'),
     path('otp-login/', views.otp_login, name='otp_login_flat'),
+
+    path('banks/nearby/', nearby_banks_view, name='nearby_banks'),
 ]

@@ -1,4 +1,5 @@
 import SwotMatrix from "./SwotMatrix";
+import NearbyBanksWidget from "./NearbyBanksWidget";
 
 export default function AdvisoryReportView({ report }) {
   if (!report) return null;
@@ -20,7 +21,7 @@ export default function AdvisoryReportView({ report }) {
       <div>
         <h3 className="font-display text-lg text-forest-dk mb-1">Market Reach & Opportunity</h3>
         <p className="text-sm text-gray-700 leading-relaxed">{report.market_reach_summary}</p>
-        
+
         {report.opportunity_analysis && report.opportunity_analysis.length > 0 && (
           <ul className="mt-2 list-disc pl-5 text-xs text-gray-600 space-y-1">
             {report.opportunity_analysis.map((opp, idx) => (
@@ -156,6 +157,13 @@ export default function AdvisoryReportView({ report }) {
           ))}
         </ul>
       </div>
+
+      {/* 7. Institutional Infrastructure (Nearby Banks) */}
+      <NearbyBanksWidget
+        pincode={report.pincode}
+        lat={report.latitude}
+        lon={report.longitude}
+      />
     </div>
   );
 }
